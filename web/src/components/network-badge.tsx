@@ -4,14 +4,6 @@ import { NETWORK } from "@/lib/env";
 import { cn } from "@/lib/utils";
 
 const COLORS: Record<typeof NETWORK, { classes: string; dot: string }> = {
-  devnet: {
-    classes: "border-slate-500/40 bg-slate-500/10 text-slate-200",
-    dot: "bg-slate-400",
-  },
-  testnet: {
-    classes: "border-amber-500/40 bg-amber-500/10 text-amber-300",
-    dot: "bg-amber-400",
-  },
   mainnet: {
     classes: "border-primary/40 bg-primary/10 text-primary",
     dot: "bg-primary animate-pulse",

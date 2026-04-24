@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   NETWORKS,
   findMainnetMethod,
@@ -6,85 +6,61 @@ import {
   isNetwork,
   requireAddress,
   resolveAddress,
-  resolveAddresses,
-  setDevnetAddresses,
 } from "./index";
 
 describe("networks", () => {
-  it("lists devnet, testnet, mainnet", () => {
-    expect(NETWORKS).toEqual(["devnet", "testnet", "mainnet"]);
+  it("is mainnet-only since 2026-04-24 split", () => {
+    expect(NETWORKS).toEqual(["mainnet"]);
   });
 
-  it("recognises supported network names", () => {
+  it("recognises mainnet, rejects everything else", () => {
     expect(isNetwork("mainnet")).toBe(true);
+    expect(isNetwork("testnet")).toBe(false);
+    expect(isNetwork("devnet")).toBe(false);
     expect(isNetwork("sepolia")).toBe(false);
   });
 
-  it("gives each network a well-formed config", () => {
-    for (const n of NETWORKS) {
-      const cfg = getNetworkConfig(n);
-      expect(cfg.name).toBe(n);
-      expect(cfg.nodeUrl).toMatch(/^https?:\/\//);
-      expect(cfg.confirmations).toBeGreaterThan(0);
-    }
+  it("gives mainnet a well-formed config", () => {
+    const cfg = getNetworkConfig("mainnet");
+    expect(cfg.name).toBe("mainnet");
+    expect(cfg.nodeUrl).toMatch(/^https:\/\//);
+    expect(cfg.confirmations).toBeGreaterThan(0);
+    expect(cfg.networkId).toBe(0);
   });
 });
 
 describe("addresses", () => {
-  beforeEach(() => {
-    setDevnetAddresses({});
-  });
-
-  it("resolves published testnet addresses", () => {
-    expect(resolveAddress("testnet", "abdToken")).toBe(
-      "2AEnwNzccQ3ymXLkEKqnk8Tr3pLbEoYzBtKwsiRRoy79y",
+  it("resolves high-confidence AlphBanX mainnet roles", () => {
+    expect(resolveAddress("mainnet", "abdToken")).toBe(
+      "288xqicj5pfGWuxJLKYU78Pe55LENz4ndGXRoykz7NL2K",
     );
-    expect(resolveAddress("testnet", "loanManager")).toBe(
-      "26y5AztUG2ka985W1qYzHjvd2CocDjfSGJQm9TqmiGhE7",
+    expect(resolveAddress("mainnet", "abxToken")).toBe(
+      "258k9T6WqezTLdfGvHixXzK1yLATeSPuyhtcxzQ3V2pqV",
     );
-  });
-
-  it("returns undefined for roles not yet deployed to testnet", () => {
-    expect(resolveAddress("testnet", "abxToken")).toBeUndefined();
-    expect(resolveAddress("testnet", "auctionManager")).toBeUndefined();
-  });
-
-  it("resolves high-confidence mainnet addresses", () => {
     expect(resolveAddress("mainnet", "loanManager")).toBe(
       "tpxjsWJSaUh5i7XzNAsTWMRtD9QvDTV9zmMNeHHS6jQB",
     );
     expect(resolveAddress("mainnet", "auctionManager")).toBe(
       "29YL53teVrvK2o4P2cVej8aCGN7iQS8mE86bgxA2oFWa3",
     );
+    expect(resolveAddress("mainnet", "stakeManager")).toBe(
+      "28Mhs2tczfKJDUq7seTzaRctZXUhqkMzikrehxAHy2kVu",
+    );
+    expect(resolveAddress("mainnet", "borrowerOperations")).toBe(
+      "28QGP95rnmZYKRBEsBeGBTdLHetoSE9nxEatVrtuN2bEF",
+    );
     expect(resolveAddress("mainnet", "diaAlphPriceAdapter")).toBe(
       "2AtjFo5tY8vjxtdni43wyVaq4VczV6WBwBu5Qw9Yaiec7",
     );
   });
 
-  it("mainnet Vesting remains unlabeled (medium-confidence)", () => {
+  it("leaves medium-confidence roles unlabeled", () => {
     expect(resolveAddress("mainnet", "vesting")).toBeUndefined();
-  });
-
-  it("mainnet BorrowerOperations resolved from on-chain observation (docs/07)", () => {
-    expect(resolveAddress("mainnet", "borrowerOperations")).toBe(
-      "28QGP95rnmZYKRBEsBeGBTdLHetoSE9nxEatVrtuN2bEF",
-    );
-  });
-
-  it("mainnet StakeManager resolved from live stake-tx decode (docs/07)", () => {
-    expect(resolveAddress("mainnet", "stakeManager")).toBe(
-      "28Mhs2tczfKJDUq7seTzaRctZXUhqkMzikrehxAHy2kVu",
-    );
-  });
-
-  it("devnet cache is empty by default, overridable by setDevnetAddresses", () => {
-    expect(resolveAddresses("devnet")).toEqual({});
-    setDevnetAddresses({ abdToken: "1111" });
-    expect(resolveAddress("devnet", "abdToken")).toBe("1111");
+    expect(resolveAddress("mainnet", "circuitBreaker")).toBeUndefined();
   });
 
   it("requireAddress throws a useful message when role is unknown", () => {
-    expect(() => requireAddress("testnet", "abxToken")).toThrow(/abxToken/);
+    expect(() => requireAddress("mainnet", "vesting")).toThrow(/vesting/);
   });
 });
 

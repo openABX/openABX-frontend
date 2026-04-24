@@ -1,19 +1,8 @@
-// Per-network contract address inventory.
-//
-// testnet addresses come from the GitBook smart-contract-addresses page
-// (confirmed 2026-04-22 by GET /contracts/{addr}/state against
-// node.testnet.alephium.org v4.5.1).
-//
-// mainnet addresses derived during Phase 0 by walking on-chain state from the
-// Alephium token-list entries for ABD and ABX. See
-// references/alphbanx-contract-addresses.md for the full provenance trail and
-// confidence ratings. Medium-confidence mainnet roles (StakeManager, Vesting,
-// BorrowerOperations) remain unlabeled until Phase 1 can call into them and
-// observe signatures.
-//
-// devnet addresses are populated at `pnpm deploy:devnet` time into
-// contracts/deployments/devnet.json; this module reads that file at runtime
-// when `network === 'devnet'`. See `loadDevnetAddresses`.
+// Mainnet contract address inventory for AlphBanX's live ABD protocol.
+// Addresses derived by walking on-chain state from the Alephium token-list
+// entries for ABD and ABX, then observing user-originating write txs. See
+// references/alphbanx-contract-addresses.md for the full provenance trail
+// and confidence ratings.
 
 import type { Network } from "./networks";
 
@@ -36,16 +25,6 @@ export type ContractRole =
   | "admin";
 
 export type AddressBook = Partial<Record<ContractRole, string>>;
-
-const TESTNET_ADDRESSES: AddressBook = {
-  loanManager: "26y5AztUG2ka985W1qYzHjvd2CocDjfSGJQm9TqmiGhE7",
-  borrowerOperations: "26wzoN8h59CNgc11nFqsQx5BEQhq3LC8acnGMjqJjQrhu",
-  abdToken: "2AEnwNzccQ3ymXLkEKqnk8Tr3pLbEoYzBtKwsiRRoy79y",
-  abdPriceOracle: "wtL6PCHvbpgu3uyDzqeeg7GDSBS4U54X1mj8Bmzxd1ZH",
-  diaAlphPriceAdapter: "2APkRx4AkYnHxQHp2cEUeCQgB2QGKzjwkHx9vY68XSHps",
-  // Not yet deployed to AlphBanX testnet as of 2026-04-22 (per GitBook):
-  // abxToken, auctionManager, stakeManager, vesting, platformSettings
-};
 
 const MAINNET_ADDRESSES: AddressBook = {
   // High-confidence (verified 2026-04-22)
@@ -76,42 +55,11 @@ const MAINNET_ADDRESSES: AddressBook = {
   auctionPool20: "vLsZf6pkDAUkmvrViDtZJqKCPNAnXKZ1Uwo6cAqNijjV",
   // Medium-confidence — role partially-observed, method indices collected in
   // references/alphbanx-mainnet-methods.json. NOT exported yet until the
-  // role is confirmed:
-  //   24nvcVvScyWY1tJKMepAABwVnAVXP7KsjVrqmc4jAhD11   (2574 bytes; candidate Vesting)
-  //   uHKrQGuTtoRwR6ahAUhwdvrdcg4YVNq3BsVd4frLExLX   (1988 bytes; candidate Vesting)
-  //   vh9fQ2PRGBzSuckm6yE8crpSzVM1frzRhwkWwnFDitfH   (450 bytes; small helper)
-  //   22qGq3kq2QMCnX4HwXc9bt2AzRjwoGRmXS4Qoc687rLYf   (1178 bytes; possibly internal helper)
-  //   211mQVddZ3SEv5dZu33E9RAvDFDKPkZdZUkJp6eMEHUxo   (seen in auction+loan scripts)
+  // role is confirmed (Vesting candidates, internal helpers).
 };
 
-let devnetCache: AddressBook | null = null;
-
-function loadDevnetAddresses(): AddressBook {
-  if (devnetCache !== null) return devnetCache;
-  // In the browser, static config must be baked at build time. At Phase 1 the
-  // devnet deploy script writes contracts/deployments/devnet.json; higher-level
-  // packages set this via setDevnetAddresses() before calling resolve().
-  devnetCache = {};
-  return devnetCache;
-}
-
-/**
- * Explicitly overwrite the devnet address map. Called by deploy scripts and by
- * test fixtures. Does NOT affect testnet or mainnet maps.
- */
-export function setDevnetAddresses(addresses: AddressBook): void {
-  devnetCache = { ...addresses };
-}
-
-export function resolveAddresses(network: Network): AddressBook {
-  switch (network) {
-    case "devnet":
-      return loadDevnetAddresses();
-    case "testnet":
-      return TESTNET_ADDRESSES;
-    case "mainnet":
-      return MAINNET_ADDRESSES;
-  }
+export function resolveAddresses(_network: Network): AddressBook {
+  return MAINNET_ADDRESSES;
 }
 
 export function resolveAddress(
@@ -122,17 +70,14 @@ export function resolveAddress(
 }
 
 /**
- * Throwing variant for code paths that cannot meaningfully proceed without the
- * address (e.g., a "place a bid" UI flow).
+ * Throwing variant for code paths that cannot meaningfully proceed without
+ * the address (e.g., a "place a bid" UI flow).
  */
 export function requireAddress(network: Network, role: ContractRole): string {
   const addr = resolveAddress(network, role);
   if (!addr) {
     throw new Error(
-      `OpenABX SDK: ${role} has no known address on ${network}. If this is devnet, ` +
-        "ensure the deploy script ran and called setDevnetAddresses. " +
-        "If testnet/mainnet, this role may not yet be identified — see " +
-        "references/alphbanx-contract-addresses.md.",
+      `OpenABX SDK: ${role} has no known address on ${network}. This role may not yet be identified — see references/alphbanx-contract-addresses.md.`,
     );
   }
   return addr;

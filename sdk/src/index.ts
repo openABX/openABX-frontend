@@ -8,7 +8,6 @@ export {
   resolveAddress,
   resolveAddresses,
   requireAddress,
-  setDevnetAddresses,
 } from "./addresses";
 export type { AddressBook, ContractRole } from "./addresses";
 

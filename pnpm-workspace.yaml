@@ -1,6 +1,4 @@
 packages:
-  - "contracts"
   - "sdk"
   - "web"
   - "e2e"
-  - "indexer"

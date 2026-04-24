@@ -1,6 +1,6 @@
-// Mainnet-specific read helpers. Used by the frontend to fetch per-user
-// state that our typed @openabx/contracts clients can't read (they use
-// OpenABX's clean-room method indices, which don't match AlphBanX's).
+// Mainnet-specific read helpers. Fetch per-user state via AlphBanX's
+// observed method indices — see references/alphbanx-mainnet-methods.json
+// for the full ABI trail.
 //
 // Observed 2026-04-23:
 //   LoanManager.mi=23(address)       → ByteVec: user's Loan subcontract id

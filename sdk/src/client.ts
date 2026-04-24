@@ -1,7 +1,7 @@
-// High-level client factory. Routes calls to the right ABI/address source
-// based on the selected network. Thin on purpose — most of the heavy lifting
-// lives in typed per-contract clients that will be generated in Phase 2 from
-// @openabx/contracts's artifacts.
+// High-level client factory. Routes calls through a NodeProvider for the
+// selected network. Mainnet-only since 2026-04-24 — OpenABX is a UI over
+// AlphBanX's live mainnet contracts; testnet/devnet support was removed
+// along with the clean-room Ralph implementation.
 
 import { NodeProvider, web3 } from "@alephium/web3";
 import { getNetworkConfig, type Network } from "./networks";
@@ -15,20 +15,12 @@ export interface ClientContext {
   readonly network: Network;
   readonly provider: NodeProvider;
   readonly addresses: AddressBook;
-  /**
-   * True when we are talking to our own clean-room OpenABX contracts. On
-   * mainnet this is false — the frontend is a third-party UI over AlphBanX's
-   * deployed contracts.
-   */
-  readonly isOpenAbxDeployment: boolean;
 }
 
 let cached: ClientContext | null = null;
 
 /**
  * Build or return the shared client context for a given network. Idempotent.
- * Typed per-contract clients (LoanManager, AuctionManager, etc.) will accept a
- * ClientContext and route reads/writes through `provider` + `addresses`.
  */
 export function getClientContext(
   network: Network,
@@ -44,7 +36,6 @@ export function getClientContext(
     network,
     provider,
     addresses: resolveAddresses(network),
-    isOpenAbxDeployment: cfg.isOpenAbxDeployment,
   };
   return cached;
 }

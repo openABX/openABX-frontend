@@ -1,6 +1,9 @@
-// Supported networks for OpenABX. Drives both on-chain calls and address resolution.
+// Supported networks for OpenABX. Mainnet-only — OpenABX is a UI over
+// AlphBanX's live mainnet contracts. Testnet/devnet support was removed
+// along with the clean-room Ralph implementation on 2026-04-24 (that
+// code now lives at openABX/openabx-ref-contracts).
 
-export const NETWORKS = ["devnet", "testnet", "mainnet"] as const;
+export const NETWORKS = ["mainnet"] as const;
 export type Network = (typeof NETWORKS)[number];
 
 export function isNetwork(x: unknown): x is Network {
@@ -13,35 +16,15 @@ export interface NetworkConfig {
   readonly backendUrl: string;
   readonly networkId: number;
   readonly confirmations: number;
-  /** True if the deployed contracts are OpenABX's clean-room implementation. */
-  readonly isOpenAbxDeployment: boolean;
 }
 
 const DEFAULTS: Record<Network, NetworkConfig> = {
-  devnet: {
-    name: "devnet",
-    nodeUrl: "http://127.0.0.1:22973",
-    backendUrl: "http://127.0.0.1:22973",
-    networkId: 4,
-    confirmations: 1,
-    isOpenAbxDeployment: true,
-  },
-  testnet: {
-    name: "testnet",
-    nodeUrl: "https://node.testnet.alephium.org",
-    backendUrl: "https://backend.testnet.alephium.org",
-    networkId: 1,
-    confirmations: 2,
-    isOpenAbxDeployment: true,
-  },
   mainnet: {
     name: "mainnet",
-    // On mainnet we talk to AlphBanX's existing contracts. We did not deploy them.
     nodeUrl: "https://node.mainnet.alephium.org",
     backendUrl: "https://backend.mainnet.alephium.org",
     networkId: 0,
     confirmations: 3,
-    isOpenAbxDeployment: false,
   },
 };
 
