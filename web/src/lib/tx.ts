@@ -36,7 +36,10 @@ export function canTransact(_network: Network): boolean {
 
 /** Per-operation gate — returns true only for operations whose mainnet
  *  bytecode has been simulation-verified end-to-end. */
-export function canTransactOp(_network: Network, op: MainnetOperation): boolean {
+export function canTransactOp(
+  _network: Network,
+  op: MainnetOperation,
+): boolean {
   return canMainnetWrite(op);
 }
 

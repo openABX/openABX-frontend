@@ -4,11 +4,7 @@
 export { NETWORKS, getNetworkConfig, isNetwork } from "./networks";
 export type { Network, NetworkConfig } from "./networks";
 
-export {
-  resolveAddress,
-  resolveAddresses,
-  requireAddress,
-} from "./addresses";
+export { resolveAddress, resolveAddresses, requireAddress } from "./addresses";
 export type { AddressBook, ContractRole } from "./addresses";
 
 export {
