@@ -5,12 +5,13 @@
 // submit-phase UX, tx-confirmation polling, React-Query invalidation, AND
 // mandatory once-per-session consent on mainnet.
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { NETWORK } from "@/lib/env";
 import { translateTxError } from "@/lib/tx-errors";
 import { pollTxStatus, type TxStatus } from "@/lib/tx-status";
 import {
+  ConsentDeclinedError,
   useUnauditedConsent,
   type ConsentApi,
 } from "@/components/unaudited-consent-gate";
@@ -40,6 +41,16 @@ export function useTxRunner(): TxRunnerApi {
   const qc = useQueryClient();
   const consent = useUnauditedConsent();
 
+  // H8: AbortController bound to the hook's lifetime. Any in-flight
+  // pollTxStatus is aborted on unmount so its onUpdate callback stops
+  // calling setState on a dead component.
+  const pollAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    return () => {
+      pollAbortRef.current?.abort();
+    };
+  }, []);
+
   const execute = useCallback(
     async (action: () => Promise<{ txId: string }>) => {
       setState({ kind: "awaitingSign" });
@@ -54,8 +65,15 @@ export function useTxRunner(): TxRunnerApi {
       }
       setState({ kind: "submitted", txId });
 
+      // Cancel any prior poll before starting a new one.
+      pollAbortRef.current?.abort();
+      const ctrl = new AbortController();
+      pollAbortRef.current = ctrl;
+
       pollTxStatus(NETWORK, txId, {
+        signal: ctrl.signal,
         onUpdate: (s: TxStatus) => {
+          if (ctrl.signal.aborted) return;
           if (s.kind === "confirmed") {
             setState({ kind: "confirmed", txId });
             qc.invalidateQueries({ queryKey: ["position"] });
@@ -73,7 +91,7 @@ export function useTxRunner(): TxRunnerApi {
           }
         },
       }).catch(() => {
-        /* ignore */
+        /* ignore — abort or transient network error */
       });
     },
     [qc],
@@ -85,8 +103,17 @@ export function useTxRunner(): TxRunnerApi {
         await execute(action);
         return;
       }
-      // Open the consent modal; queued action fires on confirmation.
-      consent.withConsent(() => execute(action));
+      // H1: await the consent-gated action so callers' post-await code
+      // (e.g. clearing form inputs) runs only after the tx actually
+      // submits. A user-cancel surfaces as ConsentDeclinedError, which
+      // we swallow without surfacing as a tx error — it's not a tx
+      // failure, the user just chose not to proceed.
+      try {
+        await consent.withConsent(() => execute(action));
+      } catch (err) {
+        if (err instanceof ConsentDeclinedError) return;
+        throw err;
+      }
     },
     [consent, execute],
   );

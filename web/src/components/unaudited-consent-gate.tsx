@@ -35,9 +35,23 @@ function writeConsent(): void {
   }
 }
 
+export class ConsentDeclinedError extends Error {
+  constructor() {
+    super("Consent declined");
+    this.name = "ConsentDeclinedError";
+  }
+}
+
 export interface ConsentApi {
   granted: boolean;
-  withConsent: (action: () => void | Promise<void>) => void;
+  /**
+   * Run `action` only after the user has granted unaudited-mainnet consent.
+   * Returns a Promise that resolves once `action` resolves, or rejects with
+   * a `ConsentDeclinedError` if the user cancels the modal. Always awaited
+   * by `useTxRunner.runTx` so callers' post-await code (e.g. clearing form
+   * inputs) only fires after the action actually completes.
+   */
+  withConsent: (action: () => Promise<void>) => Promise<void>;
   isOpen: boolean;
   confirm: () => void;
   cancel: () => void;
@@ -45,10 +59,16 @@ export interface ConsentApi {
 
 const ConsentContext = createContext<ConsentApi | null>(null);
 
+interface QueuedAction {
+  action: () => Promise<void>;
+  resolve: () => void;
+  reject: (err: unknown) => void;
+}
+
 export function ConsentProvider({ children }: { children: ReactNode }) {
   const [granted, setGranted] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
-  const queuedActionRef = useRef<null | (() => void | Promise<void>)>(null);
+  const queuedActionRef = useRef<QueuedAction | null>(null);
 
   useEffect(() => {
     setGranted(readConsent());
@@ -58,25 +78,36 @@ export function ConsentProvider({ children }: { children: ReactNode }) {
     writeConsent();
     setGranted(true);
     setIsOpen(false);
-    const action = queuedActionRef.current;
+    const queued = queuedActionRef.current;
     queuedActionRef.current = null;
-    if (action) void action();
+    if (queued) {
+      queued.action().then(queued.resolve, queued.reject);
+    }
   }, []);
 
   const cancel = useCallback(() => {
     setIsOpen(false);
+    const queued = queuedActionRef.current;
     queuedActionRef.current = null;
+    queued?.reject(new ConsentDeclinedError());
   }, []);
 
   const withConsent = useCallback(
-    (action: () => void | Promise<void>) => {
-      if (granted || readConsent()) {
-        setGranted(true);
-        void action();
-        return;
-      }
-      queuedActionRef.current = action;
-      setIsOpen(true);
+    (action: () => Promise<void>): Promise<void> => {
+      return new Promise<void>((resolve, reject) => {
+        if (granted || readConsent()) {
+          setGranted(true);
+          action().then(resolve, reject);
+          return;
+        }
+        // Defensive: if a previous prompt is still queued (shouldn't happen
+        // in practice — runTx awaits — but be explicit), reject the old
+        // one before clobbering it.
+        const prior = queuedActionRef.current;
+        if (prior) prior.reject(new ConsentDeclinedError());
+        queuedActionRef.current = { action, resolve, reject };
+        setIsOpen(true);
+      });
     },
     [granted],
   );

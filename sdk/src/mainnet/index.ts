@@ -298,28 +298,34 @@ export function buildPoolClaim(
   signerAddress: string,
   amountAlphAtto: bigint,
 ): PreparedTx {
-  // Two observed variants — mi=40 and mi=42. mi=42 is more common (787
-  // samples). The template's U256 is the claim amount. Caller MUST pass
-  // the user's current claimable balance; passing a larger value will
-  // underflow inside the pool contract, passing smaller just leaves some
-  // unclaimed. There is no safe default — the prior `= 1n` default
-  // caused any caller that lacked an up-to-date claimable read to attempt
-  // a 1 atto-ALPH claim (effectively a no-op).
+  // The mi=42 path is a *unified* claim that resolves the user's pool
+  // sub-id from their address — it does not take a tier argument in the
+  // bytecode. mi=40 is a separate variant whose role we have not pinned;
+  // it's kept in the templates dir for future analysis but not wired up.
+  // `tierBps` here is informational: the caller picks it from the user's
+  // detected pool position, and the simulation layer rejects the claim
+  // if the user has nothing to claim in that pool. Audit fix H3
+  // documents this explicitly so future readers don't expect the tier
+  // to drive the bytecode.
   assertValidAssetAddress(signerAddress, "signerAddress");
   if (amountAlphAtto <= 0n) {
     throw new Error("buildPoolClaim: amountAlphAtto must be > 0");
+  }
+  if (tierBps !== 500 && tierBps !== 1000 && tierBps !== 1500 && tierBps !== 2000) {
+    throw new Error(
+      `buildPoolClaim: tierBps must be 500/1000/1500/2000, got ${tierBps}`,
+    );
   }
   const tmpl = t<TemplateFile>(poolClaim42);
   const bytecode = applyTemplate(tmpl, {
     replaceU256: [{ from: 1321402644729719000000n, to: amountAlphAtto }],
     replaceSignerAddress: signerAddress,
   });
-  void tierBps;
   return {
     bytecode,
     attoAlphAmount: DUST,
     tokens: [],
-    label: `Claim ${amountAlphAtto} atto-ALPH from ${tierBps / 100}% pool`,
+    label: `Claim ${amountAlphAtto} atto-ALPH from ${tierBps / 100}% pool (mi=42 unified)`,
   };
 }
 

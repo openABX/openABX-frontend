@@ -265,6 +265,34 @@ export function applyTemplate(
   template: TemplateFile,
   subs: SubstitutionMap,
 ): string {
+  // Audit fix H6: when the caller asks for `replaceSignerAddress`, we
+  // require the template to contain exactly one P2PKH `AddressConst` —
+  // the user-address slot the substitution targets. Previously the
+  // substitution rewrote every `AddressConst` in the template, so a
+  // template that grew a referrer / hint / fee-recipient slot would
+  // have its non-user addresses silently overwritten with the signer.
+  // Pre-pass and fail loudly rather than corrupting the bytecode.
+  if (subs.replaceSignerAddress) {
+    let p2pkhCount = 0;
+    let nonP2pkhCount = 0;
+    for (const m of template.methods) {
+      for (const ins of m.instrs) {
+        if (ins.name !== "AddressConst") continue;
+        const v = ins.value as { kind?: string } | undefined;
+        if (v?.kind === "P2PKH") p2pkhCount++;
+        else nonP2pkhCount++;
+      }
+    }
+    if (p2pkhCount !== 1) {
+      throw new Error(
+        `applyTemplate.replaceSignerAddress requires exactly one P2PKH ` +
+          `AddressConst in template "${template.operation}", found ${p2pkhCount} ` +
+          `(plus ${nonP2pkhCount} non-P2PKH AddressConst). Refusing to ` +
+          `substitute — bytecode would be ambiguous.`,
+      );
+    }
+  }
+
   const methods: AnyMethod[] = template.methods.map((m) => ({
     isPublic: true,
     usePreapprovedAssets: true,
@@ -286,11 +314,18 @@ export function applyTemplate(
         }
       }
       if (ins.name === "AddressConst" && subs.replaceSignerAddress) {
-        return {
-          name: "AddressConst",
-          code: 0x15,
-          value: lockupScriptFromAddress(subs.replaceSignerAddress),
-        };
+        // Only swap P2PKH AddressConsts (per docstring on
+        // SubstitutionMap.replaceSignerAddress). Non-P2PKH slots are
+        // typically contract / multisig hints baked into the script
+        // and must be preserved.
+        const v = ins.value as { kind?: string } | undefined;
+        if (v?.kind === "P2PKH") {
+          return {
+            name: "AddressConst",
+            code: 0x15,
+            value: lockupScriptFromAddress(subs.replaceSignerAddress),
+          };
+        }
       }
       return rehydrateInstr(ins);
     }),

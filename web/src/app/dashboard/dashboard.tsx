@@ -97,6 +97,10 @@ export function Dashboard() {
     (sum, p) => sum + bigintToNumber(p.claimableAlphAtto, 18),
     0,
   );
+  // Audit fix H4: detect tier-undetermined deposits so the dashboard pool
+  // card surfaces a warning instead of pretending the deposit lives in a
+  // specific tier.
+  const hasUndeterminedPool = activePools.some((p) => p.tierUndetermined);
 
   return (
     <div className="space-y-12">
@@ -376,8 +380,16 @@ export function Dashboard() {
                     </span>
                   </div>
                   <div className="border-t border-border/60 pt-2 text-xs text-muted-foreground">
-                    Across {activePools.length} active{" "}
-                    {activePools.length === 1 ? "tier" : "tiers"}
+                    {hasUndeterminedPool ? (
+                      <span className="text-warning">
+                        Tier could not be decoded — see /auction for details
+                      </span>
+                    ) : (
+                      <>
+                        Across {activePools.length} active{" "}
+                        {activePools.length === 1 ? "tier" : "tiers"}
+                      </>
+                    )}
                   </div>
                 </div>
               ) : (

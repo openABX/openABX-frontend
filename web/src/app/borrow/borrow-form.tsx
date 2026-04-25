@@ -160,12 +160,21 @@ export function BorrowForm() {
     isLoading,
     error,
   } = useAlphPrice();
-  // F-08: mark the displayed price as stale if the last successful refresh
-  // was >2× the polling interval ago (60s). Submission is gated separately
-  // on metrics.valid so a stale price also yields valid=false through its
-  // effect on the CR computation.
+  // F-08 / audit fix H2: mark the displayed price as stale if the last
+  // successful refresh was >2× the polling interval ago (60s). Stale price
+  // is now an explicit submission gate (`metrics.valid` includes
+  // `!isPriceStale`) — previously the comment claimed staleness propagated
+  // through CR but it didn't, since the cached price kept feeding the CR
+  // computation.
+  const [now, setNow] = useState<number>(() => Date.now());
+  useEffect(() => {
+    // Re-render every 5s so isPriceStale flips reactively rather than only
+    // when the polling fetch fires.
+    const t = setInterval(() => setNow(Date.now()), 5_000);
+    return () => clearInterval(t);
+  }, []);
   const isPriceStale =
-    lastUpdatedMs != null && Date.now() - lastUpdatedMs > 60_000;
+    lastUpdatedMs != null && now - lastUpdatedMs > 60_000;
 
   const metrics = useMemo(() => {
     const collNum = Number(collateralAlph) || 0;
@@ -189,7 +198,8 @@ export function BorrowForm() {
       collNum > 0 &&
       debtNum >= MIN_LOAN_ABD &&
       crPercent >= MCR * 100 &&
-      feeAlph < collNum;
+      feeAlph < collNum &&
+      !isPriceStale;
 
     return {
       collateralUsd,
@@ -202,7 +212,7 @@ export function BorrowForm() {
       maxBorrowAtMcr,
       valid,
     };
-  }, [collateralAlph, borrowAbd, priceUsdPerAlph]);
+  }, [collateralAlph, borrowAbd, priceUsdPerAlph, isPriceStale]);
 
   const zone =
     metrics && isFinite(metrics.crPercent) ? crZone(metrics.crPercent) : null;
@@ -490,17 +500,19 @@ export function BorrowForm() {
             </dl>
             {!metrics.valid && (
               <p className="rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive">
-                {Number(collateralAlph) <= 0
-                  ? "Enter a positive collateral amount."
-                  : Number(borrowAbd) <= 0
-                    ? `Enter a borrow amount of at least ${MIN_LOAN_ABD} ABD.`
-                    : Number(borrowAbd) < MIN_LOAN_ABD
-                      ? `Below minimum loan size of ${MIN_LOAN_ABD} ABD.`
-                      : metrics.crPercent < MCR * 100
-                        ? "CR is below the 200 % minimum. Add collateral or reduce the borrow amount."
-                        : metrics.feeAlph >= Number(collateralAlph)
-                          ? "Minting fee exceeds collateral. Increase collateral or reduce borrow."
-                          : "Form not valid yet."}
+                {isPriceStale
+                  ? "Oracle price is stale (last update >60 s ago). Refresh the page or wait for the next oracle read before submitting — opening a loan against a stale price could leave you closer to liquidation than the preview shows."
+                  : Number(collateralAlph) <= 0
+                    ? "Enter a positive collateral amount."
+                    : Number(borrowAbd) <= 0
+                      ? `Enter a borrow amount of at least ${MIN_LOAN_ABD} ABD.`
+                      : Number(borrowAbd) < MIN_LOAN_ABD
+                        ? `Below minimum loan size of ${MIN_LOAN_ABD} ABD.`
+                        : metrics.crPercent < MCR * 100
+                          ? "CR is below the 200 % minimum. Add collateral or reduce the borrow amount."
+                          : metrics.feeAlph >= Number(collateralAlph)
+                            ? "Minting fee exceeds collateral. Increase collateral or reduce borrow."
+                            : "Form not valid yet."}
               </p>
             )}
           </section>

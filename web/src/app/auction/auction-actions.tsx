@@ -58,6 +58,13 @@ export function AuctionActions() {
     submit.kind === "submitted" ||
     submit.kind === "confirming";
 
+  // Audit fix H4: surface deposits whose tier OpenABX could not decode.
+  // We will not let users route deposit/withdraw/claim at a guessed tier
+  // — the warning directs them to AlphBanX's UI for that position.
+  const undetermined = (pools ?? []).find(
+    (p) => p.tierUndetermined && p.abdAtto > 0n,
+  );
+
   async function runAction(bps: PoolTier, action: Action | "claim") {
     if (!isConnected || !wallet.signer) return;
     if (action === "claim") {
@@ -88,9 +95,48 @@ export function AuctionActions() {
       <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
         Deposit, withdraw, claim
       </h3>
+      {undetermined && (
+        <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-xs text-warning">
+          <p className="font-medium">
+            We detected an auction-pool deposit of{" "}
+            <span className="font-mono">
+              {formatAmount(undetermined.abdAtto, 9, 2)} ABD
+            </span>{" "}
+            in your wallet&rsquo;s pool sub-contract, but could not decode its
+            tier from on-chain state.
+          </p>
+          <p className="mt-1 text-warning/90">
+            OpenABX will not route deposit / withdraw / claim against an
+            unknown tier — please manage this position from{" "}
+            <a
+              href="https://app.alphbanx.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-mono underline-offset-2 hover:underline"
+            >
+              app.alphbanx.com
+            </a>{" "}
+            and file an issue at{" "}
+            <a
+              href="https://github.com/openABX/openABX-frontend/issues"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-mono underline-offset-2 hover:underline"
+            >
+              github.com/openABX/openABX-frontend/issues
+            </a>{" "}
+            so we can pin the tier-detection slot.
+          </p>
+        </div>
+      )}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {TIERS.map((tier) => {
-          const pool = pools?.find((p) => p.discountBps === tier.bps);
+          // H4: filter out undetermined-tier placeholder so we don't
+          // misattribute the deposit to the 500-bps card. The banner
+          // above carries that surfacing.
+          const pool = pools?.find(
+            (p) => p.discountBps === tier.bps && !p.tierUndetermined,
+          );
           const mode = modes[tier.bps];
 
           return (

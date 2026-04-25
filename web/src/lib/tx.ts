@@ -5,7 +5,7 @@
 // the wallet is asked to sign. See docs/07-mainnet-write-path.md for the
 // template-building methodology.
 
-import { ONE_ALPH, type SignerProvider } from "@alephium/web3";
+import { type SignerProvider } from "@alephium/web3";
 import type { MainnetOperation, Network, PreparedTx } from "@openabx/sdk";
 import {
   buildAddCollateral as mnBuildAddCollateral,
@@ -27,6 +27,7 @@ import {
   resolveAddress,
   simulateScript,
 } from "@openabx/sdk";
+import { fetchLoanPosition } from "./user-position";
 
 /** Writes are always allowed at the network level on mainnet (per-operation
  *  gating happens via canTransactOp). */
@@ -47,6 +48,15 @@ interface SimResultLike {
   result?: unknown;
 }
 
+// H9: simulation buffer was previously +1 ALPH on top of the script's APS
+// approval. The wallet adds gas separately at submission time, so a +1
+// ALPH simulation buffer over-approved the user's available margin —
+// users with a tight wallet balance could see a green simulation and then
+// hit "insufficient gas" at signing. A 0.1 ALPH buffer matches realistic
+// Alephium tx-script gas (typically <0.05 ALPH) without masking real
+// wallet-balance shortfalls.
+const SIM_GAS_BUFFER_ATTO = 100_000_000_000_000_000n; // 0.1 ALPH
+
 async function submitPrepared(
   network: Network,
   signer: SignerProvider,
@@ -61,7 +71,7 @@ async function submitPrepared(
     prepared.bytecode,
     signerAddress,
     {
-      attoAlphAmount: prepared.attoAlphAmount + ONE_ALPH, // buffer for gas
+      attoAlphAmount: prepared.attoAlphAmount + SIM_GAS_BUFFER_ATTO,
       tokens: prepared.tokens,
     },
   );
@@ -171,14 +181,42 @@ export async function repay(
 export async function closeLoan(
   network: Network,
   signer: SignerProvider,
-  remainingDebtAbdAtto: bigint = 0n,
+  // Retained for compatibility with old callers but no longer used: we now
+  // read the fresh debt at click time so the APS approval covers any
+  // interest accrued since the last poll. Audit fix H5.
+  _cachedDebtAbdAtto: bigint = 0n,
 ): Promise<TxResult> {
   requireSigner(signer);
   const account = await signer.getSelectedAccount();
+
+  // H5: read fresh debt right before submitting. The cached
+  // `useLoanPosition` value polls every 30 s and reads `mut[4]` raw —
+  // it does not include interest accrued since the last poll. APS
+  // approving exactly the cached debt would revert at signing time
+  // ("Not enough approved balance") for any user whose wallet ABD is
+  // tight. Reading fresh shrinks the staleness window to a single
+  // round-trip and the buffer covers the residual.
+  const fresh = await fetchLoanPosition(network, account.address);
+  if (!fresh.exists) {
+    throw new Error(
+      "closeLoan: no active loan was found on-chain for this wallet — " +
+        "the loan may have already been closed.",
+    );
+  }
+
+  // Buffer the approval by 0.1 % to cover interest accrued during the
+  // simulation/submission round-trip. Approval is a ceiling — the
+  // contract takes only what it actually needs and refunds the rest.
+  // 0.1 % at a 30 % APR is roughly one day of interest, comfortably
+  // above any plausible mempool inclusion window.
+  const APPROVAL_BUFFER_BPS = 10n;
+  const debtAtto =
+    (fresh.debtAtto * (10_000n + APPROVAL_BUFFER_BPS)) / 10_000n;
+
   return submitPrepared(
     network,
     signer,
-    mnBuildCloseLoan(remainingDebtAbdAtto, account.address),
+    mnBuildCloseLoan(debtAtto, account.address),
   );
 }
 
@@ -287,18 +325,25 @@ export async function withdrawFromPool(
           }
         }
       }
-      // Allow a small tolerance — the contract may take a fee or round.
-      // Mismatch by more than 5% (or any negative delta) is treated as a
-      // misencoded withdraw amount and aborted.
-      const lower = (amountAbdAtto * 95n) / 100n;
-      const upper = (amountAbdAtto * 105n) / 100n;
+      // Audit fix H7: tolerance tightened from ±5% to ±1%. The semantics
+      // of the U256 slot we substitute (`158n` in the sample template,
+      // see SDK comment on T.poolWithdrawAbd) are not yet positively
+      // identified — this post-sim check is the user-visible safety net.
+      // A 5% window allowed up to ~5% silent loss on a misencoded
+      // template; the realistic protocol-fee ceiling on a withdraw is
+      // far below 1%, so any out-of-band delta is a misencoding signal
+      // worth aborting on. Negative delta (received < requested) is
+      // always treated as a misencoding and aborts.
+      const lower = (amountAbdAtto * 99n) / 100n;
+      const upper = (amountAbdAtto * 101n) / 100n;
       if (abdReceived < lower || abdReceived > upper) {
         throw new Error(
           `Pool-withdraw simulation returned ${abdReceived} atto-ABD to ` +
-            `your wallet but you asked for ${amountAbdAtto}. The withdraw-` +
-            `amount slot in the operation template may be misencoded — ` +
-            `please use AlphBanX's official UI for this withdraw and file ` +
-            `an issue at github.com/openABX/openABX-frontend/issues.`,
+            `your wallet but you asked for ${amountAbdAtto} (delta outside ` +
+            `±1% tolerance). The withdraw-amount slot in the operation ` +
+            `template may be misencoded — please use AlphBanX's official ` +
+            `UI for this withdraw and file an issue at ` +
+            `github.com/openABX/openABX-frontend/issues.`,
         );
       }
     },

@@ -72,7 +72,10 @@ export function LoanManage() {
 
   async function runClose() {
     if (!wallet.signer || !loan?.exists) return;
-    await runTx(() => closeLoan(NETWORK, wallet.signer!, loan.debtAtto));
+    // H5: tx.ts::closeLoan now reads fresh debt at click time and applies
+    // a 0.1 % approval buffer for accrued interest. We no longer pass the
+    // cached `loan.debtAtto`; it would have been silently stale.
+    await runTx(() => closeLoan(NETWORK, wallet.signer!));
   }
 
   const actions: Array<{ id: ManageAction; label: string; unit: string }> = [

@@ -155,6 +155,10 @@ export interface PoolPosition {
   hasDeposit: boolean;
   abdAtto: bigint;
   claimableAlphAtto: bigint;
+  /** Audit fix H4: surfaced from the SDK so consumers can render a
+   * "tier undetermined" warning instead of silently misclassifying or
+   * hiding the deposit. */
+  tierUndetermined?: boolean;
 }
 
 export async function fetchPoolPositions(
@@ -171,6 +175,7 @@ export async function fetchPoolPositions(
     hasDeposit: p.depositedAbdAtto > 0n,
     abdAtto: p.depositedAbdAtto,
     claimableAlphAtto: p.claimableAlphAtto,
+    tierUndetermined: p.tierUndetermined,
   }));
 }
 

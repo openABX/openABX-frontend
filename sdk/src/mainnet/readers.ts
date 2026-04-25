@@ -368,6 +368,16 @@ export interface MainnetPoolPosition {
   depositedAbdAtto: bigint;
   claimableAlphAtto: bigint;
   subAddress: string | null;
+  /**
+   * True when the user has an on-chain pool sub-contract with a positive
+   * deposit but the pool's tier could NOT be decoded from the sub's
+   * state (audit fix H4). When set, callers must NOT route deposits /
+   * withdraws / claims at any specific tier — `tierBps` carries a
+   * placeholder value (500) and `depositedAbdAtto` carries the real
+   * deposit so the UI can still surface "you have a position" without
+   * misclassifying it.
+   */
+  tierUndetermined?: boolean;
 }
 
 export interface MainnetPoolTvl {
@@ -536,19 +546,39 @@ export async function fetchMainnetPoolPositions(
     // Identify the user's actual tier from the sub's parent contract id.
     // Falling back to "report under tier 15" (the prior behavior) was
     // wrong: it caused claim / withdraw to fire against the wrong pool
-    // and hid 5/10/20% positions entirely. If we can't detect the tier,
-    // return empty and let the UI render a "position present, tier
-    // undetermined — use AlphBanX's UI" state rather than mis-route.
+    // and hid 5/10/20% positions entirely.
+    //
+    // Audit fix H4: when the tier cannot be decoded, return an explicit
+    // "tier undetermined" position carrying the real deposit so the UI
+    // can render a warning. Previously this path silently returned
+    // all-zero positions, hiding the user's deposit from the dashboard
+    // / auction page entirely.
     const detectedTier = detectPoolTier(state);
+    const tiers: Array<500 | 1000 | 1500 | 2000> = [500, 1000, 1500, 2000];
     if (detectedTier === null) {
       // eslint-disable-next-line no-console
       console.warn(
         `[openabx] pool position detected at ${subAddr} (deposited=${deposited}) ` +
-          `but the pool tier could not be decoded from the sub's state. ` +
-          `Showing no position; please use AlphBanX's UI to manage this deposit.`,
+          `but the pool tier could not be decoded from the sub's state.`,
       );
+      return [
+        {
+          tierBps: 500,
+          depositedAbdAtto: deposited,
+          claimableAlphAtto: claimable,
+          subAddress: subAddr,
+          tierUndetermined: true,
+        },
+        ...tiers
+          .filter((t) => t !== 500)
+          .map<MainnetPoolPosition>((t) => ({
+            tierBps: t,
+            depositedAbdAtto: 0n,
+            claimableAlphAtto: 0n,
+            subAddress: subAddr,
+          })),
+      ];
     }
-    const tiers: Array<500 | 1000 | 1500 | 2000> = [500, 1000, 1500, 2000];
     return tiers.map((tier) => ({
       tierBps: tier,
       depositedAbdAtto: tier === detectedTier ? deposited : 0n,
