@@ -266,32 +266,54 @@ export function applyTemplate(
   subs: SubstitutionMap,
 ): string {
   // Audit fix H6: when the caller asks for `replaceSignerAddress`, we
-  // require the template to contain exactly one P2PKH `AddressConst` —
-  // the user-address slot the substitution targets. Previously the
-  // substitution rewrote every `AddressConst` in the template, so a
-  // template that grew a referrer / hint / fee-recipient slot would
-  // have its non-user addresses silently overwritten with the signer.
-  // Pre-pass and fail loudly rather than corrupting the bytecode.
+  // require every P2PKH `AddressConst` in the template to share the
+  // same value — the user-address slot(s) the substitution targets.
+  // Previously the substitution rewrote every P2PKH `AddressConst`
+  // unconditionally, so a template that grew a referrer / hint / fee-
+  // recipient slot with a *different* P2PKH would be silently
+  // corrupted. Refuse when distinct P2PKH values appear; allow N
+  // identical copies (e.g. openLoan11 reuses the same address in 4
+  // slots — bool-eq check, asset-addr check, transfer recipient,
+  // CallExternal arg — all pointing at the same baked referrer).
   if (subs.replaceSignerAddress) {
-    let p2pkhCount = 0;
+    const p2pkhValues = new Set<string>();
     let nonP2pkhCount = 0;
     for (const m of template.methods) {
       for (const ins of m.instrs) {
         if (ins.name !== "AddressConst") continue;
-        const v = ins.value as { kind?: string } | undefined;
-        if (v?.kind === "P2PKH") p2pkhCount++;
-        else nonP2pkhCount++;
+        const v = ins.value as { kind?: string; value?: unknown } | undefined;
+        if (v?.kind === "P2PKH") {
+          // Normalise to a hex key so we can compare across input shapes
+          // (string / Uint8Array / {n: number} object).
+          p2pkhValues.add(JSON.stringify(v.value ?? null));
+        } else {
+          nonP2pkhCount++;
+        }
       }
     }
-    if (p2pkhCount !== 1) {
+    if (p2pkhValues.size !== 1) {
       throw new Error(
-        `applyTemplate.replaceSignerAddress requires exactly one P2PKH ` +
-          `AddressConst in template "${template.operation}", found ${p2pkhCount} ` +
-          `(plus ${nonP2pkhCount} non-P2PKH AddressConst). Refusing to ` +
-          `substitute — bytecode would be ambiguous.`,
+        `applyTemplate.replaceSignerAddress requires every P2PKH ` +
+          `AddressConst in template "${template.operation}" to share a ` +
+          `single value, found ${p2pkhValues.size} distinct P2PKH ` +
+          `value(s) (plus ${nonP2pkhCount} non-P2PKH AddressConst). ` +
+          `Refusing to substitute — bytecode would be ambiguous.`,
       );
     }
   }
+
+  // Audit fix H2: track substitution hits so a missed rule throws
+  // instead of silently emitting the original baked sample-tx amount.
+  // A `replaceU256` rule whose `from` doesn't appear in the template
+  // is almost always a sign that either the template JSON drifted
+  // (regenerated against a newer sample tx with different baked
+  // values) or the SDK's `T.*` constants were fat-fingered. Either
+  // way, the user would have signed a tx that ignored their input.
+  const u256Hits = new Map<bigint, number>();
+  if (subs.replaceU256) {
+    for (const r of subs.replaceU256) u256Hits.set(r.from, 0);
+  }
+  let signerHits = 0;
 
   const methods: AnyMethod[] = template.methods.map((m) => ({
     isPublic: true,
@@ -310,6 +332,7 @@ export function applyTemplate(
         const current = BigInt(ins.value);
         const hit = subs.replaceU256.find((r) => r.from === current);
         if (hit) {
+          u256Hits.set(hit.from, (u256Hits.get(hit.from) ?? 0) + 1);
           return rehydrateInstr({ ...ins, value: hit.to.toString() });
         }
       }
@@ -320,6 +343,7 @@ export function applyTemplate(
         // and must be preserved.
         const v = ins.value as { kind?: string } | undefined;
         if (v?.kind === "P2PKH") {
+          signerHits++;
           return {
             name: "AddressConst",
             code: 0x15,
@@ -330,6 +354,30 @@ export function applyTemplate(
       return rehydrateInstr(ins);
     }),
   }));
+
+  // Audit fix H2: every requested substitution must have hit at least
+  // once. A miss means the SDK's `from` value drifted from the
+  // template JSON; emitting the original bytecode would silently ship
+  // the sample-tx baked amount instead of the user's input.
+  if (subs.replaceU256) {
+    for (const r of subs.replaceU256) {
+      if ((u256Hits.get(r.from) ?? 0) === 0) {
+        throw new Error(
+          `applyTemplate: U256 substitution from=${r.from} did not match ` +
+            `any U256Const in template "${template.operation}". The ` +
+            `template's baked values may have drifted from the SDK's T.* ` +
+            `constants — refusing to emit silently-stale bytecode.`,
+        );
+      }
+    }
+  }
+  if (subs.replaceSignerAddress && signerHits === 0) {
+    throw new Error(
+      `applyTemplate: replaceSignerAddress requested but no P2PKH ` +
+        `AddressConst was found in template "${template.operation}".`,
+    );
+  }
+
   const bytes = scriptCodec.encode({ methods } as AnyInstr);
   return binToHex(bytes);
 }

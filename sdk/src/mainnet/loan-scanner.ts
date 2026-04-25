@@ -34,6 +34,32 @@ interface ExplorerTx {
   inputs?: Array<{ address?: string; contractInput: boolean }>;
 }
 
+// Audit fix H5: shape-validate the explorer payload before reading
+// fields. A misconfigured backend could otherwise feed garbage into
+// `borrowers.add(inp.address)` (e.g., non-string addresses, malformed
+// inputs) which would later trip downstream `assertValidAssetAddress`
+// or surface as confusing "no candidates" silence.
+function isExplorerTxArray(x: unknown): x is ExplorerTx[] {
+  if (!Array.isArray(x)) return false;
+  for (const t of x) {
+    if (typeof t !== "object" || t === null) return false;
+    const e = t as Record<string, unknown>;
+    if (typeof e["hash"] !== "string") return false;
+    if (e["inputs"] !== undefined) {
+      if (!Array.isArray(e["inputs"])) return false;
+      for (const inp of e["inputs"] as unknown[]) {
+        if (typeof inp !== "object" || inp === null) return false;
+        const i = inp as Record<string, unknown>;
+        if (typeof i["contractInput"] !== "boolean") return false;
+        if (i["address"] !== undefined && typeof i["address"] !== "string") {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
 async function fetchRecentBorrowers(
   nodeUrl: string,
   loanManagerAddress: string,
@@ -45,9 +71,10 @@ async function fetchRecentBorrowers(
       `${BACKEND}/addresses/${loanManagerAddress}/transactions?page=1&limit=${limit}`,
     );
     if (!res.ok) return new Set();
-    const txs = (await res.json()) as ExplorerTx[];
+    const json: unknown = await res.json();
+    if (!isExplorerTxArray(json)) return new Set();
     const borrowers = new Set<string>();
-    for (const tx of txs) {
+    for (const tx of json) {
       for (const inp of tx.inputs ?? []) {
         if (!inp.contractInput && inp.address) borrowers.add(inp.address);
       }
@@ -56,6 +83,40 @@ async function fetchRecentBorrowers(
   } catch {
     return new Set();
   }
+}
+
+function isFieldSlot(x: unknown): x is { type: string; value: string } {
+  if (typeof x !== "object" || x === null) return false;
+  const e = x as Record<string, unknown>;
+  return typeof e["type"] === "string" && typeof e["value"] === "string";
+}
+
+function isCallSucceeded(x: unknown): x is {
+  type: string;
+  returns?: Array<{ type: string; value: string }>;
+} {
+  if (typeof x !== "object" || x === null) return false;
+  const obj = x as Record<string, unknown>;
+  if (obj["type"] !== "CallContractSucceeded") return false;
+  if (obj["returns"] !== undefined) {
+    if (!Array.isArray(obj["returns"])) return false;
+    for (const e of obj["returns"] as unknown[]) {
+      if (!isFieldSlot(e)) return false;
+    }
+  }
+  return true;
+}
+
+function isStateLike(x: unknown): x is {
+  mutFields: Array<{ type: string; value: string }>;
+} {
+  if (typeof x !== "object" || x === null) return false;
+  const obj = x as Record<string, unknown>;
+  if (!Array.isArray(obj["mutFields"])) return false;
+  for (const v of obj["mutFields"] as unknown[]) {
+    if (!isFieldSlot(v)) return false;
+  }
+  return true;
 }
 
 async function fetchLoanSnapshotFor(
@@ -78,20 +139,18 @@ async function fetchLoanSnapshotFor(
       body,
     });
     if (!res.ok) return null;
-    const json = (await res.json()) as {
-      type: string;
-      returns?: Array<{ type: string; value: string }>;
-    };
-    if (json.type !== "CallContractSucceeded") return null;
-    const idHex = json.returns?.[0]?.value;
+    // Audit fix H5: shape-validate before dereferencing fields.
+    const callJson: unknown = await res.json();
+    if (!isCallSucceeded(callJson)) return null;
+    const idHex = callJson.returns?.[0]?.value;
     if (!idHex || idHex.length !== 64) return null;
     const loanAddress = addressFromContractId(idHex);
 
     const stateRes = await fetch(`${nodeUrl}/contracts/${loanAddress}/state`);
     if (!stateRes.ok) return null;
-    const state = (await stateRes.json()) as {
-      mutFields: Array<{ type: string; value: string }>;
-    };
+    const stateJson: unknown = await stateRes.json();
+    if (!isStateLike(stateJson)) return null;
+    const state = stateJson;
     const u256 = (i: number): bigint =>
       state.mutFields[i]?.type === "U256"
         ? BigInt(state.mutFields[i]!.value)

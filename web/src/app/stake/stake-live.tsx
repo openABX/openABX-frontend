@@ -3,6 +3,10 @@
 import { useEffect, useState } from "react";
 import { getNetworkConfig, resolveAddress } from "@openabx/sdk";
 import { NETWORK } from "@/lib/env";
+import {
+  isContractStateResponse,
+  isNodeCallResponse,
+} from "@/lib/user-position";
 
 interface SnapshotState {
   abxTotalSupply: number | null;
@@ -117,36 +121,40 @@ function useStakeSnapshot(refreshMs = 30_000): SnapshotState {
         if (!abxRes.ok) throw new Error(`ABX HTTP ${abxRes.status}`);
         if (!oracleRes.ok) throw new Error(`oracle HTTP ${oracleRes.status}`);
 
-        const abd = (await abdRes.json()) as {
-          mutFields: Array<{ type: string; value: string }>;
-        };
-        const abx = (await abxRes.json()) as {
-          immFields: Array<{ type: string; value: string }>;
-          mutFields: Array<{ type: string; value: string }>;
-        };
-        const oracle = (await oracleRes.json()) as {
-          type: string;
-          returns?: Array<{ type: string; value: string }>;
-        };
+        // Audit fix H5: shape-validate every node response before
+        // dereferencing fields. A malformed/proxy-cached response no
+        // longer propagates `undefined` into BigInt or display layers.
+        const abdRaw: unknown = await abdRes.json();
+        const abxRaw: unknown = await abxRes.json();
+        const oracleRaw: unknown = await oracleRes.json();
+        if (!isContractStateResponse(abdRaw)) {
+          throw new Error("ABD state response did not match expected shape");
+        }
+        if (!isContractStateResponse(abxRaw)) {
+          throw new Error("ABX state response did not match expected shape");
+        }
+        if (!isNodeCallResponse(oracleRaw)) {
+          throw new Error("oracle response did not match expected shape");
+        }
 
-        const abdTotalSupply = decodeTokenSupply(abd.mutFields, ABD_SCALE);
-        const abxTotalSupply = decodeTokenSupply(abx.mutFields, ABX_SCALE);
-        const symbol = abx.immFields[0]?.value
-          ? hexToUtf8(abx.immFields[0].value)
+        const abdTotalSupply = decodeTokenSupply(abdRaw.mutFields, ABD_SCALE);
+        const abxTotalSupply = decodeTokenSupply(abxRaw.mutFields, ABX_SCALE);
+        const symbol = abxRaw.immFields[0]?.value
+          ? hexToUtf8(abxRaw.immFields[0].value)
           : null;
 
         const oraclePrice =
-          oracle.type === "CallContractSucceeded" &&
-          oracle.returns?.[0]?.type === "U256"
-            ? Number(BigInt(oracle.returns[0].value)) / PRECISION
+          oracleRaw.type === "CallContractSucceeded" &&
+          oracleRaw.returns?.[0]?.type === "U256"
+            ? Number(BigInt(oracleRaw.returns[0].value)) / PRECISION
             : null;
 
         let poolTotal: number | null = null;
         if (amRes && amRes.ok) {
-          const am = (await amRes.json()) as {
-            mutFields: Array<{ type: string; value: string }>;
-          };
-          poolTotal = decodeAuctionMgrTvl(NETWORK, am.mutFields);
+          const amRaw: unknown = await amRes.json();
+          if (isContractStateResponse(amRaw)) {
+            poolTotal = decodeAuctionMgrTvl(NETWORK, amRaw.mutFields);
+          }
         }
 
         if (!cancelled) {

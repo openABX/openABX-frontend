@@ -66,6 +66,23 @@ function matchToken(
   return 0n;
 }
 
+function isBalanceResponse(x: unknown): x is BalanceResponse {
+  if (typeof x !== "object" || x === null) return false;
+  const obj = x as Record<string, unknown>;
+  if (typeof obj["balance"] !== "string") return false;
+  if (obj["tokenBalances"] !== undefined) {
+    if (!Array.isArray(obj["tokenBalances"])) return false;
+    for (const t of obj["tokenBalances"] as unknown[]) {
+      if (typeof t !== "object" || t === null) return false;
+      const e = t as Record<string, unknown>;
+      if (typeof e["id"] !== "string" || typeof e["amount"] !== "string") {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 export async function fetchWalletBalances(
   network: Network,
   walletAddress: string,
@@ -73,7 +90,11 @@ export async function fetchWalletBalances(
   const nodeUrl = getNetworkConfig(network).nodeUrl;
   const res = await fetch(`${nodeUrl}/addresses/${walletAddress}/balance`);
   if (!res.ok) throw new Error(`balance HTTP ${res.status}`);
-  const json = (await res.json()) as BalanceResponse;
+  // Audit fix H5: shape-validate before reading fields.
+  const json: unknown = await res.json();
+  if (!isBalanceResponse(json)) {
+    throw new Error("balance response did not match expected shape");
+  }
   const tokens = json.tokenBalances ?? [];
   const abdId = tokenIdFromAddress(resolveAddress(network, "abdToken"));
   const abxId = tokenIdFromAddress(resolveAddress(network, "abxToken"));
@@ -114,13 +135,14 @@ export async function fetchLoanPosition(
   if (!loanId) return EMPTY_LOAN;
   try {
     const loanAddress = addressFromContractId(loanId);
-    const res = await fetch(
-      `${getNetworkConfig(network).nodeUrl}/contracts/${loanAddress}/state`,
+    // Audit fix H5: route through the shape-validated rawState helper
+    // instead of casting raw JSON. A malformed response now degrades to
+    // EMPTY_LOAN cleanly rather than crashing on `.mutFields[i]`.
+    const state = await rawState(
+      getNetworkConfig(network).nodeUrl,
+      loanAddress,
     );
-    if (!res.ok) return EMPTY_LOAN;
-    const state = (await res.json()) as {
-      mutFields: Array<{ type: string; value: string }>;
-    };
+    if (!state) return EMPTY_LOAN;
     const u256 = (i: number): bigint | null => {
       const f = state.mutFields[i];
       if (!f || f.type !== "U256") return null;
@@ -254,6 +276,43 @@ interface ContractStateResponse {
   mutFields: Array<{ type: string; value: string }>;
 }
 
+// Audit fix H5: runtime shape validation. The mainnet node response is
+// untrusted input from the perspective of a misconfigured/proxy-cached
+// RPC; silently casting the JSON and dereferencing `.mutFields[i]`
+// produces undefined-propagation bugs that flow as 0n into the UI.
+export function isFieldSlot(x: unknown): x is { type: string; value: string } {
+  if (typeof x !== "object" || x === null) return false;
+  const e = x as Record<string, unknown>;
+  return typeof e["type"] === "string" && typeof e["value"] === "string";
+}
+
+export function isContractStateResponse(
+  x: unknown,
+): x is ContractStateResponse {
+  if (typeof x !== "object" || x === null) return false;
+  const obj = x as Record<string, unknown>;
+  if (!Array.isArray(obj["immFields"]) || !Array.isArray(obj["mutFields"])) {
+    return false;
+  }
+  for (const v of obj["immFields"] as unknown[])
+    if (!isFieldSlot(v)) return false;
+  for (const v of obj["mutFields"] as unknown[])
+    if (!isFieldSlot(v)) return false;
+  return true;
+}
+
+export function isNodeCallResponse(x: unknown): x is NodeCallResponse {
+  if (typeof x !== "object" || x === null) return false;
+  const obj = x as Record<string, unknown>;
+  if (typeof obj["type"] !== "string") return false;
+  if (obj["returns"] !== undefined) {
+    if (!Array.isArray(obj["returns"])) return false;
+    for (const v of obj["returns"] as unknown[])
+      if (!isFieldSlot(v)) return false;
+  }
+  return true;
+}
+
 async function rawState(
   nodeUrl: string,
   address: string,
@@ -261,7 +320,8 @@ async function rawState(
   try {
     const res = await fetch(`${nodeUrl}/contracts/${address}/state`);
     if (!res.ok) return null;
-    return (await res.json()) as ContractStateResponse;
+    const json: unknown = await res.json();
+    return isContractStateResponse(json) ? json : null;
   } catch {
     return null;
   }
@@ -279,7 +339,8 @@ async function rawCall(
       body: JSON.stringify({ group: 0, address, methodIndex }),
     });
     if (!res.ok) return null;
-    return (await res.json()) as NodeCallResponse;
+    const json: unknown = await res.json();
+    return isNodeCallResponse(json) ? json : null;
   } catch {
     return null;
   }

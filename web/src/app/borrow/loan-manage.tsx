@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useWallet } from "@alephium/web3-react";
+import type { MainnetOperation } from "@openabx/sdk";
 import { NETWORK } from "@/lib/env";
 import {
   addCollateral,
@@ -48,15 +49,18 @@ export function LoanManage() {
 
   async function runPrimary(e: React.FormEvent) {
     e.preventDefault();
-    if (!wallet.signer || !address) return;
+    if (!wallet.signer || !address || !activeAction) return;
     const raw = Number(amount) || 0;
     if (raw <= 0) return;
     const decimals =
-      action === "addCollateral" || action === "withdrawCollateral" ? 18 : 9;
+      activeAction.id === "addCollateral" ||
+      activeAction.id === "withdrawCollateral"
+        ? 18
+        : 9;
     const atto = numberToBigint(raw, decimals);
     if (atto <= 0n) return;
     await runTx(async () => {
-      switch (action) {
+      switch (activeAction.id) {
         case "addCollateral":
           return addCollateral(NETWORK, wallet.signer!, atto);
         case "withdrawCollateral":
@@ -78,14 +82,40 @@ export function LoanManage() {
     await runTx(() => closeLoan(NETWORK, wallet.signer!));
   }
 
-  const actions: Array<{ id: ManageAction; label: string; unit: string }> = [
-    { id: "addCollateral", label: "Add collateral", unit: "ALPH" },
-    { id: "withdrawCollateral", label: "Withdraw collateral", unit: "ALPH" },
-    { id: "borrowMore", label: "Borrow more", unit: "ABD" },
-    { id: "repay", label: "Repay", unit: "ABD" },
+  // Audit fix H6: filter manage actions by per-operation gate so the
+  // UI never offers a button (e.g. "Borrow more") whose tx-builder is
+  // hard-coded to throw at runtime. The borrowMore template is still
+  // pending — until its U256 semantics are pinned, exposing it would
+  // funnel users into the generic translated-error toast.
+  const ALL_ACTIONS: Array<{
+    id: ManageAction;
+    label: string;
+    unit: string;
+    op: MainnetOperation;
+  }> = [
+    {
+      id: "addCollateral",
+      label: "Add collateral",
+      unit: "ALPH",
+      op: "addCollateral",
+    },
+    {
+      id: "withdrawCollateral",
+      label: "Withdraw collateral",
+      unit: "ALPH",
+      op: "withdrawCollateral",
+    },
+    { id: "borrowMore", label: "Borrow more", unit: "ABD", op: "borrowMore" },
+    { id: "repay", label: "Repay", unit: "ABD", op: "repay" },
   ];
+  const actions = ALL_ACTIONS.filter((a) => canTransactOp(NETWORK, a.op));
 
-  const activeAction = actions.find((a) => a.id === action)!;
+  // If the user's selected action got filtered out (e.g. they clicked
+  // "Borrow more" before this gate flipped), fall back to the first
+  // available action so the form never points at a disabled op.
+  const activeAction =
+    actions.find((a) => a.id === action) ?? actions[0] ?? null;
+  if (!activeAction) return null;
 
   return (
     <section className="space-y-4 rounded-lg border border-primary/40 bg-primary/5 p-5">

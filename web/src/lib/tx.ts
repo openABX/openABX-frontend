@@ -22,6 +22,7 @@ import {
   buildStake as mnBuildStake,
   buildWithdrawCollateral as mnBuildWithdrawCollateral,
   canMainnetWrite,
+  fetchMainnetPoolPositions,
   fetchMainnetStakePosition,
   getNetworkConfig,
   resolveAddress,
@@ -121,9 +122,15 @@ export async function openLoan(
   params: OpenLoanParams,
 ): Promise<TxResult> {
   requireSigner(signer);
+  // Audit fix H1: pass the caller's address through to buildOpenLoan so
+  // the template's hardcoded referrer slot is substituted with the
+  // user's own address, eliminating the 0.001-ALPH per-loan leak to the
+  // sample-tx signer.
+  const account = await signer.getSelectedAccount();
   const prepared = mnBuildOpenLoan(
     params.collateralAlphAtto,
     params.borrowAbdAtto,
+    account.address,
   );
   return submitPrepared(network, signer, prepared);
 }
@@ -363,10 +370,30 @@ export async function claimFromPool(
     );
   }
   const account = await signer.getSelectedAccount();
+
+  // Audit fix H3: re-read the live claimable just before submission to
+  // shrink the read-to-submit staleness window. The cached value comes
+  // from a 30 s React Query poll; pool rewards accrue continuously, so
+  // a stale arg either short-pays the user (if the contract caps at
+  // min(arg, real)) or reverts (if it treats arg as exact). The same
+  // pattern was applied to `claimStakingRewards` against the
+  // StakeManager — we know that one caps; the AuctionPool method=42
+  // semantics aren't pinned, so re-reading is the conservative fix.
+  const fresh = await fetchMainnetPoolPositions(network, account.address);
+  const freshTier = fresh.find((p) => p.tierBps === tier);
+  const freshClaimable = freshTier?.claimableAlphAtto ?? 0n;
+  if (freshClaimable <= 0n) {
+    throw new Error(
+      "claimFromPool: no claimable rewards on this pool right now — the " +
+        "previous read may have been stale, or the rewards were already " +
+        "claimed.",
+    );
+  }
+
   return submitPrepared(
     network,
     signer,
-    mnBuildPoolClaim(tier, account.address, claimableAlphAtto),
+    mnBuildPoolClaim(tier, account.address, freshClaimable),
   );
 }
 

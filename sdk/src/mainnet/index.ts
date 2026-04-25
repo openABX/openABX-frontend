@@ -350,18 +350,32 @@ export function buildPoolClaim(
  * Whatever rate the template encodes is what every loan opened via
  * OpenABX gets. The borrow form documents this; users who need a
  * different tier should use AlphBanX's official UI.
+ *
+ * Audit fix H1 (2026-04-25): the openLoan11 template bakes a
+ * "referrer" P2PKH AddressConst in 4 slots — bool-eq check, asset-
+ * address check, TransferAlph recipient (1e15 atto-ALPH = 0.001 ALPH),
+ * and the AddressConst arg passed to BorrowerOperations.method[11].
+ * Prior builds shipped that baked address verbatim, so every loan
+ * opened via OpenABX leaked 0.001 ALPH per click to the original
+ * sample-tx signer. Substituting the signer's own address makes the
+ * caller-vs-referrer bool-eq check return true, so the IfFalse skips
+ * the TransferAlph block entirely, and the CallExternal receives the
+ * caller's address as referrer — no third-party leak.
  */
 export function buildOpenLoan(
   collateralAlphAtto: bigint,
   borrowAbdAtto: bigint,
+  signerAddress: string,
 ): PreparedTx {
+  assertValidAssetAddress(signerAddress, "signerAddress");
   const tmpl = t<TemplateFile>(openLoan11);
   const bytecode = applyTemplate(tmpl, {
     replaceU256: [{ from: T.openLoan11BorrowAbd, to: borrowAbdAtto }],
+    replaceSignerAddress: signerAddress,
   });
   return {
     bytecode,
-    attoAlphAmount: collateralAlphAtto + ONE_ALPH, // collateral + referrer-fee buffer
+    attoAlphAmount: collateralAlphAtto + ONE_ALPH, // collateral + script overhead buffer
     tokens: [],
     label: `Open loan: collateral ${collateralAlphAtto}, borrow ${borrowAbdAtto}`,
   };

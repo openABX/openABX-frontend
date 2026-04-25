@@ -4,6 +4,10 @@ import { useEffect, useState } from "react";
 import { getNetworkConfig, resolveAddress } from "@openabx/sdk";
 import { NETWORK } from "@/lib/env";
 import { usePoolsTvl } from "@/lib/hooks/use-pools-tvl";
+import {
+  isContractStateResponse,
+  isNodeCallResponse,
+} from "@/lib/user-position";
 import { explorerAddressUrl } from "@/lib/validation";
 import { cn } from "@/lib/utils";
 
@@ -74,11 +78,19 @@ function useAuctionSnapshot(refreshMs = 30_000): PoolSnapshot {
         ]);
         if (!amRes.ok) throw new Error(`AuctionManager HTTP ${amRes.status}`);
         if (!oracleRes.ok) throw new Error(`oracle HTTP ${oracleRes.status}`);
-        const am = (await amRes.json()) as NodeState;
-        const oracle = (await oracleRes.json()) as {
-          type: string;
-          returns?: Array<{ type: string; value: string }>;
-        };
+        // Audit fix H5: shape-validate before dereferencing fields.
+        const amRaw: unknown = await amRes.json();
+        const oracleRaw: unknown = await oracleRes.json();
+        if (!isContractStateResponse(amRaw)) {
+          throw new Error(
+            "AuctionManager state response did not match expected shape",
+          );
+        }
+        if (!isNodeCallResponse(oracleRaw)) {
+          throw new Error("oracle response did not match expected shape");
+        }
+        const am: NodeState = amRaw;
+        const oracle = oracleRaw;
 
         // Identify the aggregate-ABD mutField. AuctionManager's state has
         // several U256 fields including fee percentages (at 1e18 scale),
